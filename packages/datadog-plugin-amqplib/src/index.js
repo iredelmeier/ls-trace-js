@@ -2,6 +2,7 @@
 
 const kebabCase = require('lodash.kebabcase')
 const analyticsSampler = require('../../dd-trace/src/analytics_sampler')
+const { HTTP_HEADERS } = require('../../../ext/formats')
 
 let methods = {}
 
@@ -24,7 +25,13 @@ function createWrapSendMessage (tracer, config) {
 function createWrapDispatchMessage (tracer, config) {
   return function wrapDispatchMessage (dispatchMessage) {
     return function dispatchMessageWithTrace (fields, message) {
-      const span = tracer.startSpan('amqp.command')
+      let childOf = null
+
+      if (message.properties && message.properties.headers) {
+        childOf = tracer.extract(HTTP_HEADERS, message.properties.headers)
+      }
+
+      const span = tracer.startSpan('amqp.command', { childOf })
 
       addTags(this, tracer, config, span, 'basic.deliver', fields)
 
@@ -50,6 +57,14 @@ function sendWithTrace (send, channel, args, tracer, config, method, fields) {
   addTags(channel, tracer, config, span, method, fields)
 
   analyticsSampler.sample(span, config.analytics)
+
+  if (method === 'basic.publish') {
+    const { headers } = fields
+
+    if (headers) {
+      tracer.inject(span, HTTP_HEADERS, headers)
+    }
+  }
 
   return tracer.scope().activate(span, () => {
     try {
